@@ -1,0 +1,18 @@
+# Fund data and generated outputs — never commit holdings/trade files
+data/
+output/
+Files Needed/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Excel lock files
+~$*
