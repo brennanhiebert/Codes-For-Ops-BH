@@ -110,6 +110,16 @@ def assemble_blotter(
         }
 
         if r.action == "NO_TRADE":
+            # Not a blotter leg, but carried in `records` so the EXPANDABLE
+            # workbook can show the full universe (at-target names included).
+            records.append({
+                **base, "side": "NO_TRADE", "method": "NO_TRADE",
+                "shares": 0.0, "notional": 0.0,
+                "lots_used": 0, "multi_lot": False,
+                "avg_basis": float("nan"), "realized_gain_loss": 0.0,
+                "lot_detail": "", "flags": "at target (within rounding)",
+                "fills": [],
+            })
             continue
 
         if r.action == "BUY":
@@ -666,10 +676,13 @@ def write_expandable_xlsx(records: list[dict], path) -> None:
             pfill = PatternFill("solid", fgColor=GREEN)
         elif method == "IN_KIND":
             pfill = PatternFill("solid", fgColor=GREY)
+        elif method == "NO_TRADE":
+            pfill = PatternFill("solid", fgColor="FFFFFF")
         else:
             pfill = PatternFill("solid", fgColor=AMBER)
         style(r, pfill)
-        ws.cell(row=r, column=1).font = Font(bold=True)
+        ws.cell(row=r, column=1).font = (
+            italic if method == "NO_TRADE" else Font(bold=True))
         ws.cell(row=r, column=1).alignment = Alignment(horizontal="left")
         parent_row = r
         r += 1
@@ -727,7 +740,8 @@ def write_expandable_xlsx(records: list[dict], path) -> None:
     ws.cell(row=lr, column=1, value="Legend:").font = Font(bold=True)
     legend = [
         ("Buy", LIGHT), ("Market sell (loss harvested)", GREEN),
-        ("In-kind (gain shielded)", GREY), ("Needs attention", AMBER),
+        ("In-kind (gain shielded)", GREY), ("No trade (at target)", "FFFFFF"),
+        ("Needs attention", AMBER),
     ]
     for i, (lab, color) in enumerate(legend):
         cc = ws.cell(row=lr + 1 + i, column=1, value=lab)
