@@ -665,13 +665,20 @@ def write_expandable_xlsx(records: list[dict], path) -> None:
     r = 3
     for rec in records:
         side, method = rec["side"], rec["method"]
+        # Parent "Realized / Shielded": harvest value for MARKET legs,
+        # total gain shielded (sum over the leg's lots) for IN_KIND legs.
+        if method == "IN_KIND":
+            real_shield = sum((rec["current_price"] - f.basis) * f.shares
+                              for f in (rec.get("fills") or []))
+        else:
+            real_shield = rec["realized_gain_loss"]
         # ----- PARENT (leg) row -----
         parent = [
             rec["security_name"], rec["cusip"], rec["classification"],
             rec["current_shares"], rec["target_shares"], side, method,
             rec["shares"], rec["current_price"], rec["notional"],
             rec["avg_basis"] if not _isnan(rec["avg_basis"]) else None,
-            None, rec["realized_gain_loss"], None, rec["lots_used"],
+            None, real_shield, None, rec["lots_used"],
             rec["flags"] or None,
         ]
         for j, v in enumerate(parent, start=1):

@@ -25,6 +25,11 @@ TAXLOT_FILE = DATA_DIR / "NXTI_taxlot_06_09_2026.xlsx"
 # The fund we are rebalancing. The tracker holds ~40 funds; we keep only this one.
 FUND_NAME = "NXTI"
 
+# Cash-equivalent instruments in the taxlot file (money-market sweep etc.).
+# Never traded; excluded from the taxlot basis-fix report so corporate-action
+# flags only surface real equities.
+CASH_EQUIVALENT_CUSIPS = {"X9USDDRET"}  # Dreyfus Trsy Oblig Cash Mgmt
+
 # Run / as-of date. Drives output filenames and snapshot naming.
 RUN_DATE = "2026-06-10"
 
@@ -61,7 +66,8 @@ TARGET_MODE = "weight_x_aum"  # only mode implemented; kept explicit for clarity
 # Investable base used in the formula above.
 #   "equity_mv" — sum of NXTI equity Market Value/Exposure (cash buffer preserved).
 #   "total_nav" — equity MV + cash (deploys the cash buffer into equities).
-INVESTABLE_BASE = "equity_mv"
+# Per ops 2026-06-11: targets are sized off the FULL live NAV including cash.
+INVESTABLE_BASE = "total_nav"
 
 # How the CURRENT portfolio is valued when forming the investable base.
 #   "live"        — re-mark tracker share quantities at the price snapshot

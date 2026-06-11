@@ -221,7 +221,38 @@ def load_taxlots() -> tuple[pd.DataFrame, pd.DataFrame]:
                 f"(diff={r['diff']})"
             )
 
-    keep = ["cusip", "security_desc", "open_date", "shares", "basis", "cost"]
+    # ---- Effective basis = Taxlot Cost / Shares -------------------------- #
+    # Corporate-action adjustments (e.g. the CVNA 5:1 split) hit Shares and
+    # Taxlot Cost but sometimes NOT Taxlot Orig Price, leaving a pre-split
+    # per-share basis next to post-split shares. Cost/Shares is internally
+    # consistent either way, so ALL downstream decisions (market vs in-kind,
+    # harvested loss) use it. The raw file value is kept as basis_raw and
+    # every divergence is reported + written to a CSV for review.
+    lots["basis_raw"] = lots["basis"]
+    derived = lots["cost"] / lots["shares"]
+    usable = derived.notna() & (lots["shares"] > 0)
+    lots.loc[usable, "basis"] = derived[usable]
+    mismatch = usable & ((lots["basis_raw"] - lots["basis"]).abs() > 0.01) \
+        & ~lots["cusip"].isin(config.CASH_EQUIVALENT_CUSIPS)
+    n_mm = int(mismatch.sum())
+    if n_mm:
+        mm = lots[mismatch].copy()
+        mm["implied_ratio"] = (mm["basis_raw"] / mm["basis"]).round(4)
+        per_sec = mm.groupby(["cusip", "security_desc"]).agg(
+            lots_affected=("basis", "size"),
+            implied_ratio=("implied_ratio", "median")).reset_index()
+        path = config.OUTPUT_DIR / f"taxlot_basis_fixes_{config.run_stamp()}.csv"
+        mm[["cusip", "security_desc", "open_date", "shares", "basis_raw",
+            "basis", "cost", "implied_ratio"]].to_csv(path, index=False)
+        print(f"[load] taxlots: BASIS FIX applied to {n_mm} lot(s) where "
+              f"Orig Price != Cost/Shares (likely unadjusted corporate "
+              f"action) -> {path.name}")
+        for r in per_sec.itertuples():
+            print(f"        {r.cusip}  {r.security_desc}: "
+                  f"{r.lots_affected} lot(s), raw/fixed ratio ~{r.implied_ratio:g}")
+
+    keep = ["cusip", "security_desc", "open_date", "shares", "basis",
+            "basis_raw", "cost"]
     lots = lots[keep].reset_index(drop=True)
 
     print(f"[load] taxlots: {n_raw} raw rows -> {len(df)} non-null "
