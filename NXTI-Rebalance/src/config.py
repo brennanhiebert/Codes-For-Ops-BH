@@ -18,15 +18,15 @@ OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Input files (treated as READ-ONLY — the engine never writes to data/).
-PROFORMA_FILE = DATA_DIR / "PRO-FORMA-NXTIT-OPENING-2026-06-09-RD-2026-06-15.csv"
-TRACKER_FILE = DATA_DIR / "2026_06_08_Simplify_Portfolio_EOD_Tracker.xlsx"
+PROFORMA_FILE = DATA_DIR / "PRO-FORMA-NXTIT-OPENING-2026-06-10-RD-2026-06-15.csv"
+TRACKER_FILE = DATA_DIR / "2026_06_09_Simplify_Portfolio_EOD_Tracker.xlsx"
 TAXLOT_FILE = DATA_DIR / "NXTI_taxlot_06_09_2026.xlsx"
 
 # The fund we are rebalancing. The tracker holds ~40 funds; we keep only this one.
 FUND_NAME = "NXTI"
 
 # Run / as-of date. Drives output filenames and snapshot naming.
-RUN_DATE = "2026-06-09"
+RUN_DATE = "2026-06-10"
 
 
 # --------------------------------------------------------------------------- #
@@ -84,12 +84,11 @@ NORMALIZE_WEIGHTS = False
 # Lot engine
 # --------------------------------------------------------------------------- #
 # How each SELL is routed between market and in-kind:
-#   "all_or_nothing" — ONE method per ticker, decided by the NET indicative
-#                      G/L of the disposal: net loss -> the entire quantity is
-#                      sold at MARKET (lots picked highest basis first, max
-#                      harvest); net gain -> the entire quantity goes IN_KIND
-#                      (lots picked lowest basis first, max shield). No mixed
-#                      legs. (DEFAULT)
+#   "all_or_nothing" — ONE method per ticker. Lots are ALWAYS consumed lowest
+#                      cost basis first; the net indicative G/L of those lots
+#                      then decides the method: net gain -> the entire quantity
+#                      transfers IN_KIND, net loss -> the entire quantity is
+#                      sold at MARKET. No mixed legs. (DEFAULT)
 #   "split_by_lot"   — legacy: each lot routes individually (loss lots ->
 #                      market, gain lots -> in-kind), so one ticker can have
 #                      both a market and an in-kind leg.

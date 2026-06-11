@@ -688,13 +688,16 @@ def write_expandable_xlsx(records: list[dict], path) -> None:
         r += 1
 
         # ----- CHILD (lot) rows, grouped + collapsed -----
-        # Lots are listed in the exact order the engine consumed them:
-        #   MARKET  -> HIGHEST cost basis first (biggest loss harvested first)
-        #   IN_KIND -> LOWEST  cost basis first (biggest embedded gain shielded first)
+        # Lots are listed in the exact order the engine consumed them. Under
+        # all_or_nothing that is ALWAYS lowest cost basis first; under the
+        # legacy split policy market legs run highest-cost-first instead.
         fills = rec.get("fills") or []
         n = len(fills)
-        order_note = ("highest cost first" if method == "MARKET"
-                      else "lowest cost first" if method == "IN_KIND" else "")
+        if config.SELL_METHOD_POLICY == "all_or_nothing":
+            order_note = "lowest cost first" if method in ("MARKET", "IN_KIND") else ""
+        else:
+            order_note = ("highest cost first" if method == "MARKET"
+                          else "lowest cost first" if method == "IN_KIND" else "")
         for idx, f in enumerate(fills, start=1):
             gl_share = rec["current_price"] - f.basis        # +gain / -loss per share
             lot_pnl = gl_share * f.shares
@@ -748,8 +751,11 @@ def write_expandable_xlsx(records: list[dict], path) -> None:
         cc.fill = PatternFill("solid", fgColor=color)
         cc.border = border
     cc = ws.cell(row=lr + 1 + len(legend), column=1,
-                 value="Highlighted lot = PRIMARY (first consumed: highest cost for "
-                       "market sells, lowest cost for in-kind)")
+                 value=("Highlighted lot = PRIMARY (first consumed: lowest cost "
+                        "basis first)"
+                        if config.SELL_METHOD_POLICY == "all_or_nothing" else
+                        "Highlighted lot = PRIMARY (first consumed: highest cost "
+                        "for market sells, lowest cost for in-kind)"))
     cc.fill = PatternFill("solid", fgColor="FFF3CC"); cc.border = border
 
     return _save(wb, path)

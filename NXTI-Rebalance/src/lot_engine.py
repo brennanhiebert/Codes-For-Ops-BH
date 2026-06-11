@@ -4,14 +4,13 @@ so it is written as pure functions over plain dataclasses and unit-tested hard.
 
 Two routing policies (config.SELL_METHOD_POLICY):
 
-"all_or_nothing" (default) — ONE method for the security's entire disposal,
-decided by the NET indicative G/L:
-    1. Pick the disposal lots as a market sell would (HIGHEST basis first —
-       the most loss-favorable selection possible).
-    2. Net (price - basis) * shares over that selection:
-         net LOSS -> the whole quantity is a MARKET sell with those lots.
-         net GAIN -> the whole quantity goes IN_KIND, lots re-picked LOWEST
-                     basis first (largest embedded gain shielded first).
+"all_or_nothing" (default) — ONE method for the security's entire disposal.
+Lots are ALWAYS consumed LOWEST cost basis first; the method is a consequence
+of that selection, never a driver of it:
+    1. Consume qty_to_cover from the lots ordered lowest basis -> highest.
+    2. Net (price - basis) * shares over the consumed lots:
+         net GAIN -> the whole quantity transfers IN_KIND.
+         net LOSS -> the whole quantity is a MARKET sell.
     For a FULL sell every lot is disposed, so the net is selection-independent.
 
 "split_by_lot" (legacy) — each lot routes individually by comparing price to
@@ -221,24 +220,16 @@ def _all_or_nothing_legs(
     is_full_sell: bool,
 ) -> list[Leg]:
     """
-    ONE method for the entire disposal, decided by net indicative G/L.
-
-    The market candidate consumes lots HIGHEST basis first — the most
-    loss-favorable selection there is. If even that nets to a gain, no
-    selection can harvest a net loss, so the whole quantity goes IN_KIND
-    with lots re-picked LOWEST basis first (max gain shielded).
+    ONE method for the entire disposal; lots ALWAYS consumed lowest basis
+    first. The net indicative G/L of the consumed lots then labels the leg:
+    net gain -> IN_KIND transfer, net loss -> MARKET sell. The selection
+    never changes with the method.
     """
     qty = _sum(lots) if is_full_sell else qty_to_cover
 
-    mkt_fills, taken = _consume(
-        sorted(lots, key=lambda lt: lt.basis, reverse=True), qty)
-    net = sum((current_price - f.basis) * f.shares for f in mkt_fills)
-
-    if net < 0:
-        leg = _leg_from_fills("MARKET", mkt_fills)
-    else:
-        ink_fills, taken = _consume(sorted(lots, key=lambda lt: lt.basis), qty)
-        leg = _leg_from_fills("IN_KIND", ink_fills)
+    fills, taken = _consume(sorted(lots, key=lambda lt: lt.basis), qty)
+    net = sum((current_price - f.basis) * f.shares for f in fills)
+    leg = _leg_from_fills("IN_KIND" if net >= 0 else "MARKET", fills)
 
     legs = [leg] if leg else []
     shortfall = qty - taken
