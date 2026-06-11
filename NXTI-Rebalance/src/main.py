@@ -114,6 +114,7 @@ def _print_final_summary(summary, blot, exceptions, out_path, exp_path=None,
         print(f"  -> {desk_path}  (trader market-execution file)")
     if cust_path is not None:
         print(f"  -> {cust_path}  (custodian sell-method file)")
+    print(f"  -> {out_path.parent / ('NXTI_pre_rebalance_AUM_' + config.run_stamp() + '.csv')}  (pre-rebalance AUM detail)")
     print(f"  -> {out_path.parent / ('price_snapshot_' + config.run_stamp() + '.csv')}")
     print(f"  -> {out_path.parent / ('delta_detail_' + config.run_stamp() + '.csv')}")
 

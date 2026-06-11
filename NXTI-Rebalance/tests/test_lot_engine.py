@@ -74,6 +74,37 @@ def test_aon_net_zero_is_inkind():
     assert legs[0].method == "IN_KIND"
 
 
+def test_aon_market_leg_carries_harvest_fills_highest_cost_first():
+    """MARKET legs keep decision fills (lowest cost) AND harvest fills (highest)."""
+    lots = [L("a", 10, 95), L("b", 10, 130), L("c", 10, 120)]
+    legs = build_sell_legs(lots, PRICE, qty_to_cover=15, is_full_sell=False)
+    leg = legs[0]
+    assert leg.method == "MARKET"  # net of lowest-cost 15: +50 - 500 = -450
+    assert [f.basis for f in leg.fills] == [95, 120]          # decision picture
+    assert [f.basis for f in leg.harvest_fills] == [130, 120]  # execution picture
+    assert leg.harvest_fills[0].shares == 10 and leg.harvest_fills[1].shares == 5
+    # Harvested (execution) loss is deeper than the decision-picture net.
+    assert leg.harvest_realized_loss(PRICE) == (100 - 130) * 10 + (100 - 120) * 5
+    assert leg.harvest_realized_loss(PRICE) < leg.realized_gain_loss(PRICE)
+
+
+def test_aon_inkind_leg_has_no_harvest_fills():
+    lots = [L("a", 10, 70), L("b", 10, 80)]
+    legs = build_sell_legs(lots, PRICE, qty_to_cover=15, is_full_sell=False)
+    assert legs[0].method == "IN_KIND"
+    assert legs[0].harvest_fills == []
+    assert legs[0].harvest_realized_loss(PRICE) == 0.0
+
+
+def test_aon_full_sell_harvest_equals_decision_total():
+    """Full sell disposes every lot, so both pictures realize the same total."""
+    lots = [L("a", 10, 130), L("b", 10, 90), L("c", 10, 120), L("d", 10, 80)]
+    legs = build_sell_legs(lots, PRICE, qty_to_cover=40, is_full_sell=True)
+    leg = legs[0]
+    assert leg.method == "MARKET"
+    assert abs(leg.harvest_realized_loss(PRICE) - leg.realized_gain_loss(PRICE)) < 1e-9
+
+
 def test_aon_shortfall_flagged():
     lots = [L("a", 5, 130)]
     legs = build_sell_legs(lots, PRICE, qty_to_cover=20, is_full_sell=False)

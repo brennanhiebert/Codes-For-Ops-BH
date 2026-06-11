@@ -167,7 +167,9 @@ def assemble_blotter(
             flags = list(leg.flags)
             if recon_flag:
                 flags.append(recon_flag)
-            rgl = leg.realized_gain_loss(r.current_price)
+            # Harvested loss is reported off the EXECUTION picture (highest
+            # cost lots relieved first), not the lowest-cost decision fills.
+            rgl = leg.harvest_realized_loss(r.current_price)
             row = {
                 **base, "side": "SELL", "method": leg.method,
                 "shares": leg.shares, "notional": leg.shares * r.current_price,
@@ -178,7 +180,8 @@ def assemble_blotter(
                 "flags": "; ".join(flags),
             }
             rows.append(row)
-            records.append({**row, "fills": list(leg.fills)})
+            records.append({**row, "fills": list(leg.fills),
+                            "harvest_fills": list(leg.harvest_fills)})
             if leg.method == "UNDETERMINED" or any(
                 k in (row["flags"] or "")
                 for k in ("no tax lots", "shortfall", "reconciliation", "!= held")
@@ -591,8 +594,11 @@ def write_expandable_xlsx(records: list[dict], path) -> None:
 
     summary_rows = [
         ("TAX LOSSES HARVESTED (sold at market)", harvested, GREEN),
+        ("    lots relieved HIGHEST cost first — see 'Market Sells (Harvest)' tab",
+         None, None),
         (f"    across {len(mkt_legs)} market-sell legs / "
-         f"{sum(len(r.get('fills') or []) for r in mkt_legs)} lots", None, None),
+         f"{sum(len(r.get('harvest_fills') or r.get('fills') or []) for r in mkt_legs)} lots",
+         None, None),
         ("    market sell notional",
          sum(r["notional"] for r in mkt_legs), None),
         ("", None, None),
@@ -707,8 +713,13 @@ def write_expandable_xlsx(records: list[dict], path) -> None:
             note_bits = []
             if primary and n > 1:
                 note_bits.append(f"PRIMARY ({order_note})")
-            note_bits.append("loss realized" if method == "MARKET"
-                             else "gain shielded" if method == "IN_KIND" else "")
+            if method == "MARKET":
+                note_bits.append(
+                    "decision lot — harvest detail on Market Sells tab"
+                    if config.SELL_METHOD_POLICY == "all_or_nothing"
+                    else "loss realized")
+            elif method == "IN_KIND":
+                note_bits.append("gain shielded")
             if f.was_split:
                 note_bits.append("split lot")
             child = [
@@ -757,6 +768,92 @@ def write_expandable_xlsx(records: list[dict], path) -> None:
                         "Highlighted lot = PRIMARY (first consumed: highest cost "
                         "for market sells, lowest cost for in-kind)"))
     cc.fill = PatternFill("solid", fgColor="FFF3CC"); cc.border = border
+
+    # ----------------------------------------------------------------- #
+    # MARKET SELLS (HARVEST) sheet — the EXECUTION lot picture
+    # ----------------------------------------------------------------- #
+    # Method was decided on lowest-cost lots (main tab); once a ticker IS a
+    # market sell, the lots actually relieved are the HIGHEST cost first.
+    # This tab shows that relief and the harvested loss the Summary reports.
+    wsh = wb.create_sheet("Market Sells (Harvest)")
+    wsh.sheet_view.showGridLines = False
+    wsh.sheet_properties.outlinePr.summaryBelow = True
+
+    hcols = ["Security / Lot", "CUSIP", "ISIN", "Shares", "Price",
+             "Lot Open Date", "Lot Shares", "Lot Basis", "Loss per Share",
+             "Harvested Loss", "Flags"]
+    hncol = len(hcols)
+    wsh.merge_cells(start_row=1, start_column=1, end_row=1, end_column=hncol)
+    wsh["A1"] = (f"NXTI REBALANCE - MARKET SELLS, HARVEST LOT RELIEF  "
+                 f"({config.RUN_DATE})   |  lots relieved HIGHEST cost basis "
+                 f"first; these values feed the Summary")
+    wsh["A1"].font = title_font; wsh["A1"].fill = title_fill
+    wsh["A1"].alignment = center
+    wsh.row_dimensions[1].height = 24
+    for j, h in enumerate(hcols, start=1):
+        c = wsh.cell(row=2, column=j, value=h)
+        c.font = hdr_font; c.fill = hdr_fill; c.alignment = center; c.border = border
+
+    hfmt = {4: FMT_SHARES, 5: FMT_PRICE, 7: FMT_SHARES, 8: FMT_PRICE,
+            9: FMT_PRICE, 10: FMT_USD}
+
+    def hstyle(row_i, fill):
+        for j in range(1, hncol + 1):
+            cc2 = wsh.cell(row=row_i, column=j)
+            cc2.border = border
+            cc2.fill = fill
+            if j in hfmt:
+                cc2.number_format = hfmt[j]
+
+    hr = 3
+    total_harvested = 0.0
+    for rec in mkt_legs:
+        hfills = rec.get("harvest_fills") or rec.get("fills") or []
+        leg_loss = sum((rec["current_price"] - f.basis) * f.shares
+                       for f in hfills)
+        total_harvested += leg_loss
+        parent = [rec["security_name"], rec["cusip"], rec["isin"],
+                  rec["shares"], rec["current_price"], None, None, None, None,
+                  leg_loss, rec["flags"] or None]
+        for j, v in enumerate(parent, start=1):
+            wsh.cell(row=hr, column=j, value=v)
+        hstyle(hr, PatternFill("solid", fgColor=GREEN))
+        wsh.cell(row=hr, column=1).font = Font(bold=True)
+        wsh.cell(row=hr, column=1).alignment = Alignment(horizontal="left")
+        parent_hr = hr
+        hr += 1
+        for idx, f in enumerate(hfills, start=1):
+            gl = rec["current_price"] - f.basis
+            child = [
+                f"        ↳ lot {idx} of {len(hfills)}  ·  opened {f.open_date}"
+                + ("  (SPLIT — part of lot)" if f.was_split else ""),
+                None, None, None, rec["current_price"],
+                str(f.open_date).split(" ")[0], f.shares, f.basis, gl,
+                gl * f.shares,
+                "highest cost first" if idx == 1 and len(hfills) > 1 else None,
+            ]
+            for j, v in enumerate(child, start=1):
+                wsh.cell(row=hr, column=j, value=v)
+            hstyle(hr, PatternFill("solid", fgColor="F2F7FF"))
+            wsh.cell(row=hr, column=1).font = italic
+            wsh.cell(row=hr, column=1).alignment = Alignment(horizontal="left",
+                                                             indent=2)
+            wsh.row_dimensions[hr].outline_level = 1
+            wsh.row_dimensions[hr].hidden = True
+            hr += 1
+        if hfills:
+            wsh.row_dimensions[parent_hr].collapsed = True
+
+    wsh.cell(row=hr + 1, column=1, value="TOTAL HARVESTED").font = Font(bold=True)
+    tc = wsh.cell(row=hr + 1, column=10, value=total_harvested)
+    tc.number_format = FMT_USD
+    tc.font = Font(bold=True)
+    tc.fill = PatternFill("solid", fgColor=GREEN)
+
+    wsh.freeze_panes = "A3"
+    hwidths = [34, 12, 14, 9, 11, 13, 11, 11, 13, 15, 24]
+    for j, w in enumerate(hwidths, start=1):
+        wsh.column_dimensions[get_column_letter(j)].width = w
 
     return _save(wb, path)
 

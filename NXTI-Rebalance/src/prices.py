@@ -187,12 +187,14 @@ def mark_investable_base(
     Returns a meta dict shaped like load_tracker()'s meta, plus comparison
     fields: eod_equity_mv, drift (live/EOD - 1), n_stale_marks.
     """
-    mk = tracker[["cusip", "quantity", "market_value"]].merge(
-        snapshot[["cusip", "price"]], on="cusip", how="left"
+    mk = tracker[["cusip", "isin", "ticker", "security_desc",
+                  "quantity", "market_value"]].merge(
+        snapshot[["cusip", "price", "price_source"]], on="cusip", how="left"
     )
     has_px = mk["price"].notna() & (mk["price"] > 0)
     mk["live_mv"] = mk["quantity"] * mk["price"]
     mk.loc[~has_px, "live_mv"] = mk.loc[~has_px, "market_value"]
+    mk.loc[~has_px, "price_source"] = "tracker_eod_carried"
     n_stale = int((~has_px).sum())
     if n_stale:
         warnings.warn(
@@ -223,4 +225,50 @@ def mark_investable_base(
           f"live NAV = ${live_nav:,.0f}; investable base "
           f"({config.INVESTABLE_BASE}) = ${meta['investable_base']:,.0f}"
           f"{'; %d name(s) carried at EOD mark' % n_stale if n_stale else ''}")
+
+    _write_aum_detail(mk, cash_mv, live_equity_mv, live_nav, eod_equity_mv)
     return meta
+
+
+def _write_aum_detail(mk: pd.DataFrame, cash_mv: float, live_equity_mv: float,
+                      live_nav: float, eod_equity_mv: float) -> None:
+    """
+    Pre-rebalance AUM documentation file: one row per held position showing
+    exactly how the current portfolio was valued — quantity x price_used =
+    market_value — followed by EQUITY TOTAL, CASH, and the pre-rebalance NAV.
+    tracker_eod_mv is BNY's prior-close value for reference; mv_change is the
+    re-marking move per name.
+    """
+    detail = mk.rename(columns={
+        "security_desc": "security_name",
+        "price": "price_used",
+        "live_mv": "market_value",
+        "market_value": "tracker_eod_mv",
+    })
+    detail["market_value"] = detail["market_value"].round(2)
+    detail["mv_change"] = (detail["market_value"] - detail["tracker_eod_mv"]).round(2)
+    cols = ["ticker", "cusip", "isin", "security_name", "quantity",
+            "price_used", "price_source", "market_value", "tracker_eod_mv",
+            "mv_change"]
+    detail = detail[cols].sort_values("market_value", ascending=False)
+
+    def _total(name, mv, eod=None):
+        return {"ticker": "", "cusip": "", "isin": "", "security_name": name,
+                "quantity": None, "price_used": None, "price_source": "",
+                "market_value": round(mv, 2),
+                "tracker_eod_mv": round(eod, 2) if eod is not None else None,
+                "mv_change": round(mv - eod, 2) if eod is not None else None}
+
+    out = pd.concat([
+        detail,
+        pd.DataFrame([
+            _total("EQUITY TOTAL", live_equity_mv, eod_equity_mv),
+            _total("CASH (held static)", cash_mv, cash_mv),
+            _total("TOTAL NAV (pre-rebalance)", live_nav, eod_equity_mv + cash_mv),
+        ]),
+    ], ignore_index=True)
+
+    path = config.OUTPUT_DIR / f"NXTI_pre_rebalance_AUM_{config.run_stamp()}.csv"
+    out.to_csv(path, index=False)
+    print(f"[base] pre-rebalance AUM detail -> {path.name} "
+          f"({len(detail)} positions + cash; NAV ${live_nav:,.0f})")

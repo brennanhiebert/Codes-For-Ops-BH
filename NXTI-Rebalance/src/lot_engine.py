@@ -12,6 +12,10 @@ of that selection, never a driver of it:
          net GAIN -> the whole quantity transfers IN_KIND.
          net LOSS -> the whole quantity is a MARKET sell.
     For a FULL sell every lot is disposed, so the net is selection-independent.
+    MARKET legs additionally carry `harvest_fills`: the EXECUTION picture,
+    re-cut HIGHEST basis first for the same quantity — those are the lots
+    actually relieved at market, and harvest_realized_loss() over them is the
+    harvested-loss figure reported in the summaries.
 
 "split_by_lot" (legacy) — each lot routes individually by comparing price to
 its basis:
@@ -54,6 +58,10 @@ class Leg:
     shares: float
     fills: list[Fill] = field(default_factory=list)
     flags: list[str] = field(default_factory=list)
+    # MARKET legs under all_or_nothing carry a SECOND lot picture: the lots
+    # actually relieved at market, HIGHEST basis first (max harvested loss).
+    # `fills` stays the lowest-cost DECISION picture used to set the method.
+    harvest_fills: list[Fill] = field(default_factory=list)
 
     @property
     def lots_used(self) -> int:
@@ -75,6 +83,17 @@ class Leg:
         if self.method != "MARKET":
             return 0.0
         return sum((current_price - f.basis) * f.shares for f in self.fills)
+
+    def harvest_realized_loss(self, current_price: float) -> float:
+        """
+        The realized P&L of a MARKET sell as EXECUTED: highest-cost lots
+        relieved first. Falls back to the decision fills when no separate
+        harvest picture exists (legacy split policy).
+        """
+        if self.method != "MARKET":
+            return 0.0
+        fills = self.harvest_fills or self.fills
+        return sum((current_price - f.basis) * f.shares for f in fills)
 
 
 # --------------------------------------------------------------------------- #
@@ -230,6 +249,11 @@ def _all_or_nothing_legs(
     fills, taken = _consume(sorted(lots, key=lambda lt: lt.basis), qty)
     net = sum((current_price - f.basis) * f.shares for f in fills)
     leg = _leg_from_fills("IN_KIND" if net >= 0 else "MARKET", fills)
+    if leg and leg.method == "MARKET":
+        # Execution picture: the lots actually relieved at market are the
+        # HIGHEST cost first, maximizing the harvested loss for the same qty.
+        leg.harvest_fills, _ = _consume(
+            sorted(lots, key=lambda lt: lt.basis, reverse=True), qty)
 
     legs = [leg] if leg else []
     shortfall = qty - taken
